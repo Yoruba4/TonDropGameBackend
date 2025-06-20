@@ -1,73 +1,87 @@
-const express = require("express");
-const bodyParser = require("body-parser");
-const mongoose = require("mongoose");
-const axios = require("axios");
-require("dotenv").config();
+import express from "express";
+import mongoose from "mongoose";
+import dotenv from "dotenv";
+import TelegramBot from "node-telegram-bot-api";
+
+dotenv.config();
 
 const app = express();
-app.use(bodyParser.json());
+app.use(express.json());
 
-// Connect MongoDB
-mongoose.connect(process.env.MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-});
+// Connect to MongoDB
+mongoose
+  .connect(process.env.MONGO_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
+  .then(() => console.log("MongoDB connected"))
+  .catch((err) => console.error("MongoDB connection error:", err));
 
-const botToken = process.env.BOT_TOKEN || "8111913029:AAEjdSF64sqrPrucVQIaL3c26q7-o3d4ssc";
-const telegramAPI = `https://api.telegram.org/bot${botToken}`;
+// Telegram Bot Setup
+const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
-// Models
+// MongoDB Schemas
 const playerSchema = new mongoose.Schema({
   telegramId: String,
   wallet: String,
   score: { type: Number, default: 0 },
-  boosterExpiry: Date,
+  totalScore: { type: Number, default: 0 },
+  subscriptionExpiresAt: Date,
 });
+
+const devWalletSchema = new mongoose.Schema({
+  wallet: String,
+});
+
 const Player = mongoose.model("Player", playerSchema);
+const DevWallet = mongoose.model("DevWallet", devWalletSchema);
 
-// Send message to user
-async function sendMessage(chatId, text) {
-  await axios.post(`${telegramAPI}/sendMessage`, {
-    chat_id: chatId,
-    text,
-  });
-}
-
-// Webhook handler
-app.post("/webhook", async (req, res) => {
-  const msg = req.body.message;
+// Telegram Bot Logic
+bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
-  const telegramId = msg.from.id.toString();
+
+  let player = await Player.findOne({ telegramId: chatId.toString() });
+
+  if (!player) {
+    player = await Player.create({ telegramId: chatId.toString() });
+    bot.sendMessage(chatId, "Welcome to TonDrop! Your player account has been created.");
+  } else {
+    bot.sendMessage(chatId, "Welcome back to TonDrop!");
+  }
+});
+
+bot.on("message", async (msg) => {
+  const chatId = msg.chat.id;
   const text = msg.text?.trim();
 
-  if (text === "/start") {
-    const existing = await Player.findOne({ telegramId });
-    if (!existing) await Player.create({ telegramId });
-    await sendMessage(chatId, "🎮 Welcome to TonDrop! Tap the button in the game UI to start scoring.\n\nUse /wallet to save your TON wallet.");
-  } else if (text?.startsWith("/wallet")) {
-    const parts = text.split(" ");
-    if (parts.length === 2) {
-      const wallet = parts[1];
-      await Player.updateOne({ telegramId }, { wallet }, { upsert: true });
-      await sendMessage(chatId, "✅ Wallet saved!");
-    } else {
-      await sendMessage(chatId, "❗ Usage: /wallet YOUR_TON_ADDRESS");
-    }
-  } else if (text === "/score") {
-    const player = await Player.findOne({ telegramId });
-    await sendMessage(chatId, `🏆 Your total score is: ${player?.score || 0}`);
-  } else {
-    await sendMessage(chatId, "🤖 Unknown command. Use /start, /wallet, or /score.");
+  if (text?.startsWith("wallet:")) {
+    const wallet = text.replace("wallet:", "").trim();
+    await Player.findOneAndUpdate({ telegramId: chatId.toString() }, { wallet });
+    bot.sendMessage(chatId, `Your wallet (${wallet}) has been saved.`);
   }
 
-  res.sendStatus(200);
+  if (text?.startsWith("score:")) {
+    const points = parseInt(text.replace("score:", "").trim(), 10);
+    if (!isNaN(points)) {
+      const player = await Player.findOne({ telegramId: chatId.toString() });
+      const newScore = player.score + points;
+      const newTotal = player.totalScore + points;
+      await Player.findOneAndUpdate(
+        { telegramId: chatId.toString() },
+        { score: newScore, totalScore: newTotal }
+      );
+      bot.sendMessage(chatId, `Your score has been updated: ${newTotal} points`);
+    }
+  }
 });
 
-// Public route
+// API Route
 app.get("/", (req, res) => {
-  res.send("TonDrop backend is live!");
+  res.send("TonDrop Game Server is running");
 });
 
-// Start server
+// Start the server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("🚀 Server running on port", PORT));
+app.listen(PORT, () => {
+  console.log(`Server is listening on port ${PORT}`);
+});
