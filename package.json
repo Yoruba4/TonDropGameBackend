@@ -2,9 +2,9 @@
   "name": "ton-drop-backend",
   "version": "1.0.0",
   "description": "Backend for TonDrop Game using Express and MongoDB",
-  "main": "game.js",
+  "main": "index.js",
   "scripts": {
-    "start": "node game.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
