@@ -1,125 +1,73 @@
 const express = require("express");
+const bodyParser = require("body-parser");
 const mongoose = require("mongoose");
-const cors = require("cors");
+const axios = require("axios");
 require("dotenv").config();
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+app.use(bodyParser.json());
 
+// Connect MongoDB
 mongoose.connect(process.env.MONGO_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 });
 
-// ==== Mongoose Schemas ====
+const botToken = process.env.BOT_TOKEN || "8111913029:AAEjdSF64sqrPrucVQIaL3c26q7-o3d4ssc";
+const telegramAPI = `https://api.telegram.org/bot${botToken}`;
 
+// Models
 const playerSchema = new mongoose.Schema({
-  telegramId: { type: String, unique: true },
-  tonWallet: String,
-  totalScore: { type: Number, default: 0 },
-  boosterExpiresAt: Date,
+  telegramId: String,
+  wallet: String,
+  score: { type: Number, default: 0 },
+  boosterExpiry: Date,
 });
-
-const devWalletSchema = new mongoose.Schema({
-  tonWallet: String,
-});
-
 const Player = mongoose.model("Player", playerSchema);
-const DevWallet = mongoose.model("DevWallet", devWalletSchema);
 
-// ==== Routes ====
+// Send message to user
+async function sendMessage(chatId, text) {
+  await axios.post(`${telegramAPI}/sendMessage`, {
+    chat_id: chatId,
+    text,
+  });
+}
 
-app.get("/", (req, res) => {
-  res.send("TonDrop backend is live.");
-});
+// Webhook handler
+app.post("/webhook", async (req, res) => {
+  const msg = req.body.message;
+  const chatId = msg.chat.id;
+  const telegramId = msg.from.id.toString();
+  const text = msg.text?.trim();
 
-// Save or update TON wallet for player
-app.post("/save-wallet", async (req, res) => {
-  const { telegramId, tonWallet } = req.body;
-  if (!telegramId || !tonWallet) return res.status(400).json({ error: "Missing data" });
-
-  let player = await Player.findOne({ telegramId });
-  if (player) {
-    player.tonWallet = tonWallet;
-    await player.save();
+  if (text === "/start") {
+    const existing = await Player.findOne({ telegramId });
+    if (!existing) await Player.create({ telegramId });
+    await sendMessage(chatId, "🎮 Welcome to TonDrop! Tap the button in the game UI to start scoring.\n\nUse /wallet to save your TON wallet.");
+  } else if (text?.startsWith("/wallet")) {
+    const parts = text.split(" ");
+    if (parts.length === 2) {
+      const wallet = parts[1];
+      await Player.updateOne({ telegramId }, { wallet }, { upsert: true });
+      await sendMessage(chatId, "✅ Wallet saved!");
+    } else {
+      await sendMessage(chatId, "❗ Usage: /wallet YOUR_TON_ADDRESS");
+    }
+  } else if (text === "/score") {
+    const player = await Player.findOne({ telegramId });
+    await sendMessage(chatId, `🏆 Your total score is: ${player?.score || 0}`);
   } else {
-    player = await Player.create({ telegramId, tonWallet });
+    await sendMessage(chatId, "🤖 Unknown command. Use /start, /wallet, or /score.");
   }
 
-  res.json({ success: true, message: "Wallet saved", player });
+  res.sendStatus(200);
 });
 
-// Get total score for a player
-app.get("/player/:telegramId", async (req, res) => {
-  const player = await Player.findOne({ telegramId: req.params.telegramId });
-  if (!player) return res.status(404).json({ error: "Player not found" });
-
-  const boosterActive = player.boosterExpiresAt && new Date() < player.boosterExpiresAt;
-  res.json({
-    telegramId: player.telegramId,
-    tonWallet: player.tonWallet,
-    totalScore: player.totalScore,
-    boosterActive,
-    boosterExpiresAt: player.boosterExpiresAt,
-  });
+// Public route
+app.get("/", (req, res) => {
+  res.send("TonDrop backend is live!");
 });
 
-// Submit tap score
-app.post("/tap", async (req, res) => {
-  const { telegramId, score } = req.body;
-  if (!telegramId || typeof score !== "number") return res.status(400).json({ error: "Invalid data" });
-
-  const player = await Player.findOne({ telegramId });
-  if (!player) return res.status(404).json({ error: "Player not found" });
-
-  const now = new Date();
-  const boosterActive = player.boosterExpiresAt && now < player.boosterExpiresAt;
-  const actualScore = boosterActive ? score * 10 : score;
-
-  player.totalScore += actualScore;
-  await player.save();
-
-  res.json({ success: true, totalScore: player.totalScore });
-});
-
-// Purchase booster (mock logic — accepts "ton:xxxxx" format)
-app.post("/buy-booster", async (req, res) => {
-  const { telegramId, txHash } = req.body;
-  if (!telegramId || !txHash || !txHash.startsWith("ton:")) return res.status(400).json({ error: "Invalid data" });
-
-  const player = await Player.findOne({ telegramId });
-  if (!player) return res.status(404).json({ error: "Player not found" });
-
-  const now = new Date();
-  const newExpiry = player.boosterExpiresAt && now < player.boosterExpiresAt
-    ? new Date(player.boosterExpiresAt)
-    : now;
-
-  newExpiry.setDate(newExpiry.getDate() + 3); // Add 3 days
-  player.boosterExpiresAt = newExpiry;
-  await player.save();
-
-  res.json({ success: true, boosterExpiresAt: newExpiry });
-});
-
-// Leaderboard (top 10)
-app.get("/leaderboard", async (req, res) => {
-  const topPlayers = await Player.find().sort({ totalScore: -1 }).limit(10);
-  res.json(topPlayers.map(p => ({
-    telegramId: p.telegramId,
-    totalScore: p.totalScore,
-  })));
-});
-
-// Get developer TON wallet address
-app.get("/dev-wallet", async (req, res) => {
-  const dev = await DevWallet.findOne();
-  res.json({ tonWallet: dev?.tonWallet || "Not set" });
-});
-
-// ==== Start server ====
+// Start server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`TonDrop backend running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log("🚀 Server running on port", PORT));
