@@ -15,29 +15,29 @@ mongoose
     useNewUrlParser: true,
     useUnifiedTopology: true,
   })
-  .then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => console.error("❌ MongoDB error:", err));
+  .then(() => console.log("MongoDB connected"))
+  .catch((err) => console.error("MongoDB error:", err));
 
-// MongoDB Schema
+// Schema
 const playerSchema = new mongoose.Schema({
-  telegramId: { type: String, required: true, unique: true },
-  wallet: { type: String, default: "" },
+  telegramId: String,
+  wallet: String,
   score: { type: Number, default: 0 },
   totalScore: { type: Number, default: 0 },
-}, { versionKey: false });
-
+});
 const Player = mongoose.model("Player", playerSchema);
 
-// Home Route
+// ✅ API ROUTES
+
+// Home
 app.get("/", (req, res) => {
   res.send("TonDrop API is live");
 });
 
-// Save Wallet
+// Save wallet
 app.post("/save-wallet", async (req, res) => {
   const { telegramId, wallet } = req.body;
   if (!telegramId || !wallet) return res.status(400).json({ success: false });
-
   try {
     await Player.findOneAndUpdate(
       { telegramId },
@@ -45,57 +45,39 @@ app.post("/save-wallet", async (req, res) => {
       { upsert: true, new: true }
     );
     res.json({ success: true });
-  } catch (err) {
-    console.error("❌ Error saving wallet:", err);
+  } catch {
     res.status(500).json({ success: false });
   }
 });
 
-// Submit Score (with debug)
+// Submit score
 app.post("/submit-score", async (req, res) => {
   const { telegramId, score } = req.body;
-  if (!telegramId || typeof score !== "number") return res.status(400).json({ success: false });
+  if (!telegramId || typeof score !== "number")
+    return res.status(400).json({ success: false });
 
   try {
-    let player = await Player.findOne({ telegramId });
-
+    const player = await Player.findOne({ telegramId });
     if (!player) {
-      const newPlayer = new Player({ telegramId, score, totalScore: score });
-      newPlayer.save((err, savedPlayer) => {
-        if (err) {
-          console.error("❌ Error saving new player:", err);
-          return res.status(500).json({ success: false });
-        }
-        console.log("✅ New player saved:", savedPlayer);
-        return res.json({ success: true });
-      });
+      await Player.create({ telegramId, score, totalScore: score });
     } else {
       player.totalScore += score;
       player.score = score;
-      player.save((err, savedPlayer) => {
-        if (err) {
-          console.error("❌ Error updating player:", err);
-          return res.status(500).json({ success: false });
-        }
-        console.log("✅ Updated player score:", savedPlayer);
-        return res.json({ success: true });
-      });
+      await player.save();
     }
-  } catch (err) {
-    console.error("❌ Unexpected error:", err);
+    res.json({ success: true });
+  } catch {
     res.status(500).json({ success: false });
   }
 });
 
-// Get Player Score
+// Get player score
 app.get("/player/:telegramId", async (req, res) => {
-  const { telegramId } = req.params;
   try {
-    const player = await Player.findOne({ telegramId });
+    const player = await Player.findOne({ telegramId: req.params.telegramId });
     if (!player) return res.status(404).json({ totalScore: 0 });
     res.json({ totalScore: player.totalScore });
-  } catch (err) {
-    console.error("❌ Error getting score:", err);
+  } catch {
     res.status(500).json({ totalScore: 0 });
   }
 });
@@ -105,18 +87,17 @@ app.get("/leaderboard", async (req, res) => {
   try {
     const players = await Player.find().sort({ totalScore: -1 }).limit(10);
     res.json(players);
-  } catch (err) {
-    console.error("❌ Leaderboard fetch error:", err);
+  } catch {
     res.status(500).send("Error fetching leaderboard");
   }
 });
+
+// Debug
 app.get("/debug/players", async (req, res) => {
-  try {
-    const data = await Player.find({});
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch players" });
-  }
+  const players = await Player.find();
+  res.json(players);
 });
+
+// Start
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server running on ${PORT}`));
