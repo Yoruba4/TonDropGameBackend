@@ -110,6 +110,13 @@ app.get("/leaderboard", async (req, res) => {
     res.status(500).send("Error fetching leaderboard");
   }
 });
-
+app.get("/debug/players", async (req, res) => {
+  try {
+    const data = await Player.find({});
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch players" });
+  }
+});
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
