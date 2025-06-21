@@ -1,63 +1,96 @@
-const express = require("express");
-const mongoose = require("mongoose");
-const dotenv = require("dotenv");
-const cors = require("cors");
+import express from "express";
+import mongoose from "mongoose";
+import dotenv from "dotenv";
+import cors from "cors";
 
 dotenv.config();
+
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.use(cors());
 app.use(express.json());
+app.use(cors());
 
-// Connect to MongoDB
+// MongoDB Connection
 mongoose
   .connect(process.env.MONGO_URI, {
     useNewUrlParser: true,
     useUnifiedTopology: true,
   })
   .then(() => console.log("MongoDB connected"))
-  .catch((err) => console.error("MongoDB connection error:", err));
+  .catch((err) => console.error("MongoDB error:", err));
 
-// Define Player schema and model (must match game.js!)
+// MongoDB Schema
 const playerSchema = new mongoose.Schema({
   telegramId: String,
   wallet: String,
   score: { type: Number, default: 0 },
   totalScore: { type: Number, default: 0 },
-  subscriptionExpiresAt: Date,
 });
 
 const Player = mongoose.model("Player", playerSchema);
 
-// Routes
+// Home Route
 app.get("/", (req, res) => {
-  res.send("TonDrop Game API is live!");
+  res.send("TonDrop API is live");
 });
 
-// Get player total score
-app.get("/player/:telegramId", async (req, res) => {
+// Save Wallet
+app.post("/save-wallet", async (req, res) => {
+  const { telegramId, wallet } = req.body;
+  if (!telegramId || !wallet) return res.status(400).json({ success: false });
+
   try {
-    const player = await Player.findOne({ telegramId: req.params.telegramId });
-    if (!player) return res.status(404).json({ error: "Player not found" });
+    await Player.findOneAndUpdate(
+      { telegramId },
+      { wallet },
+      { upsert: true, new: true }
+    );
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ success: false });
+  }
+});
+
+// Submit Score
+app.post("/submit-score", async (req, res) => {
+  const { telegramId, score } = req.body;
+  if (!telegramId || typeof score !== "number") return res.status(400).json({ success: false });
+
+  try {
+    const player = await Player.findOne({ telegramId });
+    if (!player) {
+      await Player.create({ telegramId, score, totalScore: score });
+    } else {
+      player.totalScore += score;
+      player.score = score;
+      await player.save();
+    }
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ success: false });
+  }
+});
+
+// Get Player Score
+app.get("/player/:telegramId", async (req, res) => {
+  const { telegramId } = req.params;
+  try {
+    const player = await Player.findOne({ telegramId });
+    if (!player) return res.status(404).json({ totalScore: 0 });
     res.json({ totalScore: player.totalScore });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch score" });
+  } catch {
+    res.status(500).json({ totalScore: 0 });
   }
 });
 
 // Leaderboard
 app.get("/leaderboard", async (req, res) => {
   try {
-    const topPlayers = await Player.find()
-      .sort({ totalScore: -1 })
-      .limit(10);
-    res.json(topPlayers);
-  } catch (error) {
+    const players = await Player.find().sort({ totalScore: -1 }).limit(10);
+    res.json(players);
+  } catch {
     res.status(500).send("Error fetching leaderboard");
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on ${PORT}`));
