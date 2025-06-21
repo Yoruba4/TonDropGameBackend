@@ -41,11 +41,12 @@ app.post("/save-wallet", async (req, res) => {
   try {
     await Player.findOneAndUpdate(
       { telegramId },
-      { wallet },
+      { $set: { wallet } },
       { upsert: true, new: true }
     );
     res.json({ success: true });
-  } catch {
+  } catch (err) {
+    console.error("Save wallet error:", err);
     res.status(500).json({ success: false });
   }
 });
@@ -56,28 +57,36 @@ app.post("/submit-score", async (req, res) => {
   if (!telegramId || typeof score !== "number") return res.status(400).json({ success: false });
 
   try {
-    const player = await Player.findOne({ telegramId });
+    let player = await Player.findOne({ telegramId });
+
     if (!player) {
-      await Player.create({ telegramId, score, totalScore: score });
+      player = new Player({
+        telegramId,
+        score,
+        totalScore: score,
+      });
     } else {
-      player.totalScore += score;
       player.score = score;
-      await player.save();
+      player.totalScore = (player.totalScore || 0) + score;
     }
+
+    await player.save();
     res.json({ success: true });
-  } catch {
+  } catch (err) {
+    console.error("Submit score error:", err);
     res.status(500).json({ success: false });
   }
 });
 
-// Get Player Score
+// Get Player Total Score
 app.get("/player/:telegramId", async (req, res) => {
   const { telegramId } = req.params;
   try {
     const player = await Player.findOne({ telegramId });
     if (!player) return res.status(404).json({ totalScore: 0 });
     res.json({ totalScore: player.totalScore });
-  } catch {
+  } catch (err) {
+    console.error("Get player error:", err);
     res.status(500).json({ totalScore: 0 });
   }
 });
@@ -87,10 +96,11 @@ app.get("/leaderboard", async (req, res) => {
   try {
     const players = await Player.find().sort({ totalScore: -1 }).limit(10);
     res.json(players);
-  } catch {
+  } catch (err) {
+    console.error("Leaderboard error:", err);
     res.status(500).send("Error fetching leaderboard");
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on ${PORT}`));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
