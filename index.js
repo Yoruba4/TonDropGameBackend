@@ -20,11 +20,11 @@ mongoose
 
 // MongoDB Schema
 const playerSchema = new mongoose.Schema({
-  telegramId: String,
-  wallet: String,
+  telegramId: { type: String, required: true, unique: true },
+  wallet: { type: String, default: "" },
   score: { type: Number, default: 0 },
   totalScore: { type: Number, default: 0 },
-});
+}, { versionKey: false });
 
 const Player = mongoose.model("Player", playerSchema);
 
