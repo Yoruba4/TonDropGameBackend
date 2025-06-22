@@ -9,6 +9,7 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
+// MongoDB Connection
 mongoose
   .connect(process.env.MONGO_URI, {
     useNewUrlParser: true,
@@ -17,6 +18,7 @@ mongoose
   .then(() => console.log("MongoDB connected"))
   .catch((err) => console.error("MongoDB error:", err));
 
+// MongoDB Schema
 const playerSchema = new mongoose.Schema({
   telegramId: String,
   wallet: String,
@@ -27,6 +29,7 @@ const playerSchema = new mongoose.Schema({
 
 const Player = mongoose.model("Player", playerSchema);
 
+// Root Test Route
 app.get("/", (req, res) => {
   res.send("TonDrop API is live");
 });
@@ -35,6 +38,7 @@ app.get("/", (req, res) => {
 app.post("/save-wallet", async (req, res) => {
   const { telegramId, wallet } = req.body;
   if (!telegramId || !wallet) return res.status(400).json({ success: false });
+
   try {
     await Player.findOneAndUpdate(
       { telegramId },
@@ -47,77 +51,68 @@ app.post("/save-wallet", async (req, res) => {
   }
 });
 
-// Submit Score
+// Submit Score with Boost Check
 app.post("/submit-score", async (req, res) => {
   const { telegramId, score } = req.body;
   if (!telegramId || typeof score !== "number") return res.status(400).json({ success: false });
 
   try {
     const player = await Player.findOne({ telegramId });
-    if (!player) {
-      await Player.create({
-        telegramId,
-        score,
-        totalScore: score,
-      });
-    } else {
-      player.score = score;
-      player.totalScore += score;
-      await player.save();
-    }
+    if (!player) return res.status(404).json({ success: false });
+
+    const now = new Date();
+    const boostActive = player.subscriptionExpiresAt && now < new Date(player.subscriptionExpiresAt);
+    const multiplier = boostActive ? 10 : 1;
+
+    player.totalScore += score * multiplier;
+    player.score = score * multiplier;
+    await player.save();
+
+    res.json({ success: true, multiplier });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false });
+  }
+});
+
+// Subscribe (Boost 10x for 72hrs)
+app.post("/subscribe", async (req, res) => {
+  const { telegramId } = req.body;
+  if (!telegramId) return res.status(400).json({ success: false });
+
+  const expiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000); // 72 hours
+
+  try {
+    await Player.findOneAndUpdate(
+      { telegramId },
+      { subscriptionExpiresAt: expiresAt },
+      { upsert: true }
+    );
     res.json({ success: true });
   } catch {
     res.status(500).json({ success: false });
   }
 });
 
-// Get Player Score + Subscription
+// Get Player Total Score
 app.get("/player/:telegramId", async (req, res) => {
   const { telegramId } = req.params;
   try {
     const player = await Player.findOne({ telegramId });
-    if (!player)
-      return res.status(404).json({ totalScore: 0, subscriptionActive: false });
-
-    const subscriptionActive =
-      player.subscriptionExpiresAt &&
-      new Date(player.subscriptionExpiresAt) > new Date();
-
-    res.json({
-      totalScore: player.totalScore,
-      subscriptionActive,
-    });
+    if (!player) return res.status(404).json({ totalScore: 0 });
+    res.json({ totalScore: player.totalScore || 0 });
   } catch {
-    res.status(500).json({ totalScore: 0, subscriptionActive: false });
+    res.status(500).json({ totalScore: 0 });
   }
 });
 
-// Leaderboard
+// Leaderboard Top 10
 app.get("/leaderboard", async (req, res) => {
   try {
     const players = await Player.find().sort({ totalScore: -1 }).limit(10);
     res.json(players);
   } catch {
     res.status(500).send("Error fetching leaderboard");
-  }
-});
-
-// Boost Route (called by bot on /boost)
-app.post("/boost", async (req, res) => {
-  const { telegramId } = req.body;
-  if (!telegramId) return res.status(400).json({ success: false });
-
-  try {
-    await Player.findOneAndUpdate(
-      { telegramId },
-      {
-        subscriptionExpiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000),
-      },
-      { upsert: true }
-    );
-    res.json({ success: true, expiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000) });
-  } catch {
-    res.status(500).json({ success: false });
   }
 });
 
