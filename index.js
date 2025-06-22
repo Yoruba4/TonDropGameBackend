@@ -2,6 +2,8 @@ import express from "express";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 import cors from "cors";
+import * as XLSX from "xlsx";
+import fs from "fs";
 
 dotenv.config();
 
@@ -9,35 +11,33 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// MongoDB Connection
-mongoose
-  .connect(process.env.MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
-  .then(() => console.log("MongoDB connected"))
-  .catch((err) => console.error("MongoDB error:", err));
+mongoose.connect(process.env.MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+})
+.then(() => console.log("MongoDB connected"))
+.catch((err) => console.error("MongoDB error:", err));
 
-// Schema
+// Schema and Model
 const playerSchema = new mongoose.Schema({
   telegramId: String,
   wallet: String,
   score: { type: Number, default: 0 },
   totalScore: { type: Number, default: 0 },
 });
+
 const Player = mongoose.model("Player", playerSchema);
 
-// ✅ API ROUTES
-
-// Home
+// 🟢 Home
 app.get("/", (req, res) => {
   res.send("TonDrop API is live");
 });
 
-// Save wallet
+// 🟢 Save Wallet
 app.post("/save-wallet", async (req, res) => {
   const { telegramId, wallet } = req.body;
   if (!telegramId || !wallet) return res.status(400).json({ success: false });
+
   try {
     await Player.findOneAndUpdate(
       { telegramId },
@@ -50,11 +50,12 @@ app.post("/save-wallet", async (req, res) => {
   }
 });
 
-// Submit score
+// 🟢 Submit Score
 app.post("/submit-score", async (req, res) => {
   const { telegramId, score } = req.body;
-  if (!telegramId || typeof score !== "number")
+  if (!telegramId || typeof score !== "number") {
     return res.status(400).json({ success: false });
+  }
 
   try {
     const player = await Player.findOne({ telegramId });
@@ -71,10 +72,11 @@ app.post("/submit-score", async (req, res) => {
   }
 });
 
-// Get player score
+// 🟢 Get Individual Player Total Score
 app.get("/player/:telegramId", async (req, res) => {
+  const { telegramId } = req.params;
   try {
-    const player = await Player.findOne({ telegramId: req.params.telegramId });
+    const player = await Player.findOne({ telegramId });
     if (!player) return res.status(404).json({ totalScore: 0 });
     res.json({ totalScore: player.totalScore });
   } catch {
@@ -82,7 +84,7 @@ app.get("/player/:telegramId", async (req, res) => {
   }
 });
 
-// Leaderboard
+// 🟢 Leaderboard
 app.get("/leaderboard", async (req, res) => {
   try {
     const players = await Player.find().sort({ totalScore: -1 }).limit(10);
@@ -92,12 +94,53 @@ app.get("/leaderboard", async (req, res) => {
   }
 });
 
-// Debug
-app.get("/debug/players", async (req, res) => {
-  const players = await Player.find();
-  res.json(players);
+// 🛡️ Admin middleware
+function isAdmin(req, res, next) {
+  const key = req.headers["x-admin-key"];
+  if (key === process.env.ADMIN_SECRET) {
+    next();
+  } else {
+    res.status(403).json({ error: "Forbidden" });
+  }
+}
+
+// 🔐 Admin route: View all players
+app.get("/admin/players", isAdmin, async (req, res) => {
+  try {
+    const players = await Player.find().sort({ totalScore: -1 });
+    res.json(players);
+  } catch {
+    res.status(500).json({ error: "Failed to fetch players" });
+  }
 });
 
-// Start
+// 🔐 Admin route: Export all players to Excel
+app.get("/admin/players/export", isAdmin, async (req, res) => {
+  try {
+    const players = await Player.find().sort({ totalScore: -1 });
+
+    const rows = players.map(p => ({
+      TelegramID: p.telegramId,
+      Wallet: p.wallet || "",
+      Score: p.score || 0,
+      TotalScore: p.totalScore || 0,
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Players");
+
+    const filePath = "./players_export.xlsx";
+    XLSX.writeFile(workbook, filePath);
+
+    res.download(filePath, "players_export.xlsx", () => {
+      fs.unlinkSync(filePath); // clean up temp file after sending
+    });
+  } catch {
+    res.status(500).json({ error: "Failed to export players" });
+  }
+});
+
+// Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on ${PORT}`));
