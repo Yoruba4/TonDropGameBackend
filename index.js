@@ -1,4 +1,4 @@
-// index.js - Full Backend for TonDrop Game (with username, referral, leaderboard, and competition)
+// index.js - TonDrop Game Backend
 
 import express from "express";
 import mongoose from "mongoose";
@@ -11,16 +11,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// MongoDB Connection
-mongoose
-  .connect(process.env.MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
-  .then(() => console.log("MongoDB connected"))
-  .catch((err) => console.error("MongoDB error:", err));
+// ✅ Connect to MongoDB
+mongoose.connect(process.env.MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+})
+.then(() => console.log("✅ MongoDB connected"))
+.catch((err) => console.error("❌ MongoDB connection error:", err));
 
-// Player Schema
+// ✅ Schema
 const playerSchema = new mongoose.Schema({
   telegramId: String,
   username: String,
@@ -34,7 +33,7 @@ const playerSchema = new mongoose.Schema({
 
 const Player = mongoose.model("Player", playerSchema);
 
-// Middleware to reset competition scores every 14 days
+// ✅ Middleware: Reset competition score every 14 days
 async function checkCompetitionReset(player) {
   const now = new Date();
   const last = player.lastCompetitionReset || now;
@@ -46,14 +45,14 @@ async function checkCompetitionReset(player) {
   }
 }
 
-// Save Wallet
+// ✅ Save Wallet (with username)
 app.post("/save-wallet", async (req, res) => {
   const { telegramId, username, wallet } = req.body;
   if (!telegramId || !wallet) return res.status(400).json({ success: false });
   try {
     await Player.findOneAndUpdate(
       { telegramId },
-      { wallet, username },
+      { $set: { wallet, username } },
       { upsert: true, new: true }
     );
     res.json({ success: true });
@@ -62,7 +61,7 @@ app.post("/save-wallet", async (req, res) => {
   }
 });
 
-// Submit Score
+// ✅ Submit Score
 app.post("/submit-score", async (req, res) => {
   const { telegramId, username, score } = req.body;
   if (!telegramId || typeof score !== "number") return res.status(400).json({ success: false });
@@ -89,7 +88,7 @@ app.post("/submit-score", async (req, res) => {
   }
 });
 
-// Referral registration
+// ✅ Referral system
 app.post("/refer", async (req, res) => {
   const { telegramId, username, referrer } = req.body;
   if (!telegramId || !username || !referrer || telegramId === referrer) {
@@ -108,9 +107,14 @@ app.post("/refer", async (req, res) => {
     await Player.findOneAndUpdate(
       { telegramId },
       {
-        referredBy: referrer,
-        username,
-        $inc: { totalScore: 500, competitionScore: 500 },
+        $set: {
+          referredBy: referrer,
+          username: username,
+        },
+        $inc: {
+          totalScore: 500,
+          competitionScore: 500,
+        }
       },
       { upsert: true }
     );
@@ -126,7 +130,7 @@ app.post("/refer", async (req, res) => {
   }
 });
 
-// Get player info
+// ✅ Get Player Info
 app.get("/player/:telegramId", async (req, res) => {
   const { telegramId } = req.params;
   try {
@@ -136,6 +140,7 @@ app.get("/player/:telegramId", async (req, res) => {
     await checkCompetitionReset(player);
     res.json({
       totalScore: player.totalScore,
+      competitionScore: player.competitionScore,
       username: player.username,
       referrals: player.referrals,
     });
@@ -144,7 +149,7 @@ app.get("/player/:telegramId", async (req, res) => {
   }
 });
 
-// Leaderboards
+// ✅ Global Leaderboard
 app.get("/leaderboard", async (req, res) => {
   try {
     const players = await Player.find().sort({ totalScore: -1 }).limit(10);
@@ -154,6 +159,7 @@ app.get("/leaderboard", async (req, res) => {
   }
 });
 
+// ✅ Fortnightly Competition Leaderboard
 app.get("/competition-leaderboard", async (req, res) => {
   try {
     const players = await Player.find().sort({ competitionScore: -1 }).limit(10);
@@ -163,21 +169,22 @@ app.get("/competition-leaderboard", async (req, res) => {
   }
 });
 
-// Admin: List All Users
+// ✅ Admin route to view all users
 app.get("/admin/players", async (req, res) => {
   const { secret } = req.query;
   if (secret !== process.env.ADMIN_SECRET) return res.status(403).json({ error: "Forbidden" });
+
   const users = await Player.find();
   res.json(users);
 });
 
-// Default route
+// ✅ Root
 app.get("/", (req, res) => {
   res.send("TonDrop Game Backend is live ✅");
 });
 
-// Server
+// ✅ Start server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 
 
