@@ -1,6 +1,7 @@
 {
   "name": "tondrop-backend",
   "version": "1.0.0",
+  "type": "module",
   "description": "Backend for TonDrop game",
   "main": "index.js",
   "scripts": {
