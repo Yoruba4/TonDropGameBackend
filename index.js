@@ -1,23 +1,26 @@
-// index.js - Stable TonDrop Backend
-
+// index.js – Full TonDrop Game Backend
 import express from "express";
 import mongoose from "mongoose";
-import dotenv from "dotenv";
 import cors from "cors";
+import dotenv from "dotenv";
 
 dotenv.config();
+
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-mongoose
-  .connect(process.env.MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
-  .then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => console.error("❌ MongoDB error:", err));
+// MongoDB
+mongoose.connect(process.env.MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+}).then(() => {
+  console.log("✅ MongoDB connected");
+}).catch((err) => {
+  console.error("❌ MongoDB error:", err);
+});
 
+// Schema
 const playerSchema = new mongoose.Schema({
   telegramId: String,
   username: String,
@@ -28,19 +31,22 @@ const playerSchema = new mongoose.Schema({
   referredBy: String,
   referrals: { type: Number, default: 0 },
 });
+
 const Player = mongoose.model("Player", playerSchema);
 
+// Auto reset competition score every 14 days
 async function checkCompetitionReset(player) {
   const now = new Date();
   const last = player.lastCompetitionReset || now;
-  const diff = (now - last) / (1000 * 60 * 60 * 24);
-  if (diff >= 14) {
+  const diffDays = (now - last) / (1000 * 60 * 60 * 24);
+  if (diffDays >= 14) {
     player.competitionScore = 0;
     player.lastCompetitionReset = now;
     await player.save();
   }
 }
 
+// Save wallet
 app.post("/save-wallet", async (req, res) => {
   const { telegramId, username, wallet } = req.body;
   if (!telegramId || !wallet) return res.status(400).json({ success: false });
@@ -57,37 +63,37 @@ app.post("/save-wallet", async (req, res) => {
   }
 });
 
+// Submit score
 app.post("/submit-score", async (req, res) => {
   const { telegramId, username, score } = req.body;
-  if (!telegramId || typeof score !== "number" || score <= 0) {
-    return res.status(400).json({ success: false, message: "Invalid input" });
-  }
+  if (!telegramId || typeof score !== "number" || score <= 0)
+    return res.status(400).json({ success: false });
 
   try {
     let player = await Player.findOne({ telegramId });
-
     if (!player) {
-      player = await Player.create({
+      player = new Player({
         telegramId,
         username,
         totalScore: score,
         competitionScore: score,
-        lastCompetitionReset: new Date(),
       });
     } else {
       await checkCompetitionReset(player);
       player.totalScore += score;
       player.competitionScore += score;
       player.username = username;
-      await player.save();
     }
 
+    await player.save();
     res.json({ success: true });
-  } catch {
+  } catch (err) {
+    console.error("Score submission error:", err);
     res.status(500).json({ success: false });
   }
 });
 
+// Referral
 app.post("/refer", async (req, res) => {
   const { telegramId, username, referrer } = req.body;
   if (!telegramId || !username || !referrer || telegramId === referrer)
@@ -121,6 +127,7 @@ app.post("/refer", async (req, res) => {
   }
 });
 
+// Get player info
 app.get("/player/:telegramId", async (req, res) => {
   const { telegramId } = req.params;
   try {
@@ -128,6 +135,7 @@ app.get("/player/:telegramId", async (req, res) => {
     if (!player) return res.status(404).json({ totalScore: 0 });
 
     await checkCompetitionReset(player);
+
     res.json({
       totalScore: player.totalScore,
       competitionScore: player.competitionScore,
@@ -139,27 +147,43 @@ app.get("/player/:telegramId", async (req, res) => {
   }
 });
 
-app.get("/leaderboard", async (req, res) => {
+// Global leaderboard
+app.get("/leaderboard", async (_req, res) => {
   try {
     const players = await Player.find().sort({ totalScore: -1 }).limit(10);
     res.json(players);
   } catch {
-    res.status(500).send("Error fetching leaderboard");
+    res.status(500).send("Leaderboard error");
   }
 });
 
-app.get("/competition-leaderboard", async (req, res) => {
+// Competition leaderboard
+app.get("/competition-leaderboard", async (_req, res) => {
   try {
     const players = await Player.find().sort({ competitionScore: -1 }).limit(10);
     res.json(players);
   } catch {
-    res.status(500).send("Error fetching competition leaderboard");
+    res.status(500).send("Competition leaderboard error");
   }
 });
 
-app.get("/", (req, res) => {
-  res.send("TonDrop Backend is Live ✅");
+// Admin route
+app.get("/admin/players", async (req, res) => {
+  const { secret } = req.query;
+  if (secret !== process.env.ADMIN_SECRET)
+    return res.status(403).json({ error: "Forbidden" });
+
+  const users = await Player.find();
+  res.json(users);
 });
 
+// Root
+app.get("/", (req, res) => {
+  res.send("TonDrop Backend is running ✅");
+});
+
+// Start
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`✅ Server running on port ${PORT}`);
+});
