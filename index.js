@@ -243,4 +243,17 @@ app.get("/reset-info", (req, res) => {
 
 // Start server
 const PORT = process.env.PORT || 3000;
+// Admin: Get All Players (no limit)
+app.get("/admin/all-players", async (req, res) => {
+  const { secret } = req.query;
+  if (secret !== process.env.ADMIN_SECRET)
+    return res.status(403).json({ error: "Forbidden" });
+
+  try {
+    const players = await Player.find().sort({ totalScore: -1 });
+    res.json(players);
+  } catch {
+    res.status(500).send("Error fetching all players");
+  }
+});
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
