@@ -1,8 +1,9 @@
-// index.js – Full TonDrop Game Backend
+// index.js - TonDrop Backend with leaderboard, competition, referral, and error handling
+
 import express from "express";
 import mongoose from "mongoose";
-import cors from "cors";
 import dotenv from "dotenv";
+import cors from "cors";
 
 dotenv.config();
 
@@ -10,15 +11,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// MongoDB
-mongoose.connect(process.env.MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-}).then(() => {
-  console.log("✅ MongoDB connected");
-}).catch((err) => {
-  console.error("❌ MongoDB error:", err);
-});
+// MongoDB Connect
+mongoose
+  .connect(process.env.MONGO_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
+  .then(() => console.log("✅ MongoDB connected"))
+  .catch((err) => console.error("❌ MongoDB connection error:", err));
 
 // Schema
 const playerSchema = new mongoose.Schema({
@@ -34,19 +34,29 @@ const playerSchema = new mongoose.Schema({
 
 const Player = mongoose.model("Player", playerSchema);
 
-// Auto reset competition score every 14 days
+// Safe Competition Reset
 async function checkCompetitionReset(player) {
   const now = new Date();
-  const last = player.lastCompetitionReset || now;
-  const diffDays = (now - last) / (1000 * 60 * 60 * 24);
-  if (diffDays >= 14) {
+
+  let last = new Date(player.lastCompetitionReset);
+  if (isNaN(last.getTime())) {
+    console.warn(`⚠️ Invalid lastCompetitionReset for ${player.username || player.telegramId}`);
+    last = now;
+    player.lastCompetitionReset = now;
+    player.competitionScore = 0;
+    await player.save();
+    return;
+  }
+
+  const diff = (now - last) / (1000 * 60 * 60 * 24);
+  if (diff >= 14) {
     player.competitionScore = 0;
     player.lastCompetitionReset = now;
     await player.save();
   }
 }
 
-// Save wallet
+// Save Wallet
 app.post("/save-wallet", async (req, res) => {
   const { telegramId, username, wallet } = req.body;
   if (!telegramId || !wallet) return res.status(400).json({ success: false });
@@ -58,42 +68,47 @@ app.post("/save-wallet", async (req, res) => {
       { upsert: true, new: true }
     );
     res.json({ success: true });
-  } catch {
+  } catch (err) {
+    console.error("Save wallet error:", err);
     res.status(500).json({ success: false });
   }
 });
 
-// Submit score
+// Submit Score
 app.post("/submit-score", async (req, res) => {
   const { telegramId, username, score } = req.body;
-  if (!telegramId || typeof score !== "number" || score <= 0)
-    return res.status(400).json({ success: false });
+
+  if (!telegramId || typeof score !== "number" || score <= 0) {
+    return res.status(400).json({ success: false, message: "Invalid score input" });
+  }
 
   try {
     let player = await Player.findOne({ telegramId });
+
     if (!player) {
-      player = new Player({
+      player = await Player.create({
         telegramId,
         username,
         totalScore: score,
         competitionScore: score,
+        lastCompetitionReset: new Date(),
       });
     } else {
       await checkCompetitionReset(player);
       player.totalScore += score;
       player.competitionScore += score;
       player.username = username;
+      await player.save();
     }
 
-    await player.save();
     res.json({ success: true });
   } catch (err) {
-    console.error("Score submission error:", err);
-    res.status(500).json({ success: false });
+    console.error("Score submission error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Referral
+// Referral System
 app.post("/refer", async (req, res) => {
   const { telegramId, username, referrer } = req.body;
   if (!telegramId || !username || !referrer || telegramId === referrer)
@@ -122,14 +137,16 @@ app.post("/refer", async (req, res) => {
     await inviter.save();
 
     res.json({ success: true });
-  } catch {
+  } catch (err) {
+    console.error("Referral error:", err.message);
     res.status(500).json({ success: false });
   }
 });
 
-// Get player info
+// Get Player Info
 app.get("/player/:telegramId", async (req, res) => {
   const { telegramId } = req.params;
+
   try {
     const player = await Player.findOne({ telegramId });
     if (!player) return res.status(404).json({ totalScore: 0 });
@@ -142,32 +159,32 @@ app.get("/player/:telegramId", async (req, res) => {
       username: player.username,
       lastCompetitionReset: player.lastCompetitionReset,
     });
-  } catch {
+  } catch (err) {
+    console.error("Player fetch error:", err.message);
     res.status(500).json({ totalScore: 0 });
   }
 });
 
-// Global leaderboard
-app.get("/leaderboard", async (_req, res) => {
+// Leaderboard (Top 10)
+app.get("/leaderboard", async (req, res) => {
   try {
     const players = await Player.find().sort({ totalScore: -1 }).limit(10);
     res.json(players);
   } catch {
-    res.status(500).send("Leaderboard error");
+    res.status(500).send("Error fetching leaderboard");
   }
 });
 
-// Competition leaderboard
-app.get("/competition-leaderboard", async (_req, res) => {
+app.get("/competition-leaderboard", async (req, res) => {
   try {
     const players = await Player.find().sort({ competitionScore: -1 }).limit(10);
     res.json(players);
   } catch {
-    res.status(500).send("Competition leaderboard error");
+    res.status(500).send("Error fetching competition leaderboard");
   }
 });
 
-// Admin route
+// Admin (Full List)
 app.get("/admin/players", async (req, res) => {
   const { secret } = req.query;
   if (secret !== process.env.ADMIN_SECRET)
@@ -177,13 +194,11 @@ app.get("/admin/players", async (req, res) => {
   res.json(users);
 });
 
-// Root
+// Root Route
 app.get("/", (req, res) => {
-  res.send("TonDrop Backend is running ✅");
+  res.send("✅ TonDrop Backend is running");
 });
 
-// Start
+// Start Server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
