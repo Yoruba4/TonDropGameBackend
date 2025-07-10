@@ -1,8 +1,10 @@
+// index.js - TonDrop Game Backend with CSV Export and Global Competition Reset
+
 import express from "express";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 import cors from "cors";
-import { Parser } from "json2csv"; // ✅ CSV export
+import { Parser } from "json2csv"; // ✅ Corrected from "jason2csv"
 
 dotenv.config();
 const app = express();
@@ -16,13 +18,14 @@ mongoose.connect(process.env.MONGO_URI, {
 }).then(() => console.log("✅ MongoDB connected"))
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
-// Schemas
+// Config Schema (for global competition reset)
 const configSchema = new mongoose.Schema({
   key: String,
   value: mongoose.Schema.Types.Mixed,
 });
 const Config = mongoose.model("Config", configSchema);
 
+// Player Schema
 const playerSchema = new mongoose.Schema({
   telegramId: String,
   username: String,
@@ -34,7 +37,7 @@ const playerSchema = new mongoose.Schema({
 });
 const Player = mongoose.model("Player", playerSchema);
 
-// Global competition reset
+// Global Competition Reset Logic
 async function checkAndResetCompetition() {
   let config = await Config.findOne({ key: "lastCompetitionReset" });
   const now = new Date();
@@ -55,8 +58,7 @@ async function checkAndResetCompetition() {
   }
 }
 
-// Routes
-
+// Save wallet
 app.post("/save-wallet", async (req, res) => {
   const { telegramId, username, wallet } = req.body;
   if (!telegramId || !wallet) return res.status(400).json({ success: false });
@@ -73,10 +75,11 @@ app.post("/save-wallet", async (req, res) => {
   }
 });
 
+// Submit score
 app.post("/submit-score", async (req, res) => {
   const { telegramId, username, score } = req.body;
   if (!telegramId || typeof score !== "number" || score <= 0) {
-    return res.status(400).json({ success: false });
+    return res.status(400).json({ success: false, message: "Invalid input" });
   }
 
   try {
@@ -98,11 +101,13 @@ app.post("/submit-score", async (req, res) => {
     }
 
     res.json({ success: true });
-  } catch {
+  } catch (err) {
+    console.error("Error in /submit-score:", err.message);
     res.status(500).json({ success: false });
   }
 });
 
+// Referral system
 app.post("/refer", async (req, res) => {
   const { telegramId, username, referrer } = req.body;
   if (!telegramId || !username || !referrer || telegramId === referrer) {
@@ -111,7 +116,9 @@ app.post("/refer", async (req, res) => {
 
   try {
     const existing = await Player.findOne({ telegramId });
-    if (existing?.referredBy) return res.status(400).json({ message: "Already referred" });
+    if (existing?.referredBy) {
+      return res.status(400).json({ message: "Already referred" });
+    }
 
     const inviter = await Player.findOne({ username: referrer });
     if (!inviter) return res.status(404).json({ message: "Referrer not found" });
@@ -137,6 +144,7 @@ app.post("/refer", async (req, res) => {
   }
 });
 
+// Get player info
 app.get("/player/:telegramId", async (req, res) => {
   const { telegramId } = req.params;
   try {
@@ -157,6 +165,7 @@ app.get("/player/:telegramId", async (req, res) => {
   }
 });
 
+// Leaderboards
 app.get("/leaderboard", async (req, res) => {
   try {
     const players = await Player.find().sort({ totalScore: -1 }).limit(10);
@@ -176,19 +185,7 @@ app.get("/competition-leaderboard", async (req, res) => {
   }
 });
 
-app.get("/competition-status", async (req, res) => {
-  const config = await Config.findOne({ key: "lastCompetitionReset" });
-  const last = new Date(config?.value || new Date());
-  const next = new Date(last.getTime() + 14 * 24 * 60 * 60 * 1000);
-
-  res.json({
-    lastCompetitionReset: last,
-    nextResetDate: next,
-    daysRemaining: Math.max(0, 14 - Math.floor((Date.now() - last) / (1000 * 60 * 60 * 24))),
-  });
-});
-
-// 🔐 Admin: See all users
+// Admin Players
 app.get("/admin/players", async (req, res) => {
   const { secret } = req.query;
   if (secret !== process.env.ADMIN_SECRET)
@@ -198,66 +195,37 @@ app.get("/admin/players", async (req, res) => {
   res.json(users);
 });
 
-app.get("/admin/all-players", async (req, res) => {
-  const { secret } = req.query;
-  if (secret !== process.env.ADMIN_SECRET)
-    return res.status(403).json({ error: "Forbidden" });
-
-  try {
-    const players = await Player.find().sort({ totalScore: -1 });
-    res.json(players);
-  } catch {
-    res.status(500).send("Error fetching all players");
-  }
-});
-
-// ✅ NEW CSV EXPORT ROUTE
+// Admin All Players CSV Export
 app.get("/admin/export-csv", async (req, res) => {
   const { secret } = req.query;
   if (secret !== process.env.ADMIN_SECRET)
     return res.status(403).json({ error: "Forbidden" });
 
   try {
-    const players = await Player.find();
-
-    const fields = ["telegramId", "username", "wallet", "totalScore", "competitionScore", "referredBy", "referrals"];
+    const players = await Player.find().sort({ totalScore: -1 });
+    const fields = [
+      "telegramId",
+      "username",
+      "wallet",
+      "totalScore",
+      "competitionScore",
+      "referredBy",
+      "referrals",
+    ];
     const parser = new Parser({ fields });
     const csv = parser.parse(players);
-
     res.header("Content-Type", "text/csv");
     res.attachment("players.csv");
     return res.send(csv);
   } catch (err) {
-    res.status(500).send("Error exporting CSV");
+    console.error("CSV export failed:", err.message);
+    res.status(500).send("CSV export failed");
   }
 });
 
-// Default + Reset Info
-app.get("/", (req, res) => res.send("TonDrop Game Backend is live ✅"));
-
-app.get("/reset-info", (req, res) => {
-  try {
-    const globalStart = new Date(process.env.GLOBAL_COMPETITION_START);
-    if (isNaN(globalStart)) {
-      return res.status(500).json({ error: "Invalid GLOBAL_COMPETITION_START date" });
-    }
-
-    const now = new Date();
-    const msInDay = 1000 * 60 * 60 * 24;
-    const daysSinceStart = Math.floor((now - globalStart) / msInDay);
-    const periodsPassed = Math.floor(daysSinceStart / 14);
-    const lastReset = new Date(globalStart.getTime() + periodsPassed * 14 * msInDay);
-    const nextReset = new Date(lastReset.getTime() + 14 * msInDay);
-    const daysRemaining = Math.max(0, Math.ceil((nextReset - now) / msInDay));
-
-    res.json({
-      lastReset: lastReset.toISOString(),
-      nextReset: nextReset.toISOString(),
-      daysRemaining,
-    });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to calculate reset info" });
-  }
+// Default route
+app.get("/", (req, res) => {
+  res.send("TonDrop Game Backend is live ✅");
 });
 
 // Start server
