@@ -1,4 +1,4 @@
-// index.js - TonDrop Backend with leaderboard, competition, referral, and error handling
+// index.js - Global Competition Reset (Every 14 Days) + Leaderboards + Wallet Save
 
 import express from "express";
 import mongoose from "mongoose";
@@ -6,57 +6,59 @@ import dotenv from "dotenv";
 import cors from "cors";
 
 dotenv.config();
-
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// MongoDB Connect
-mongoose
-  .connect(process.env.MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
-  .then(() => console.log("✅ MongoDB connected"))
+// MongoDB Connection
+mongoose.connect(process.env.MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+}).then(() => console.log("✅ MongoDB connected"))
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
-// Schema
+// Global Config Schema (for storing competition reset date)
+const configSchema = new mongoose.Schema({
+  key: String,
+  value: mongoose.Schema.Types.Mixed,
+});
+const Config = mongoose.model("Config", configSchema);
+
+// Player Schema
 const playerSchema = new mongoose.Schema({
   telegramId: String,
   username: String,
   wallet: String,
   totalScore: { type: Number, default: 0 },
   competitionScore: { type: Number, default: 0 },
-  lastCompetitionReset: { type: Date, default: Date.now },
   referredBy: String,
   referrals: { type: Number, default: 0 },
 });
-
 const Player = mongoose.model("Player", playerSchema);
 
-// Safe Competition Reset
-async function checkCompetitionReset(player) {
+// Get or set global competition reset
+async function checkAndResetCompetition() {
+  let config = await Config.findOne({ key: "lastCompetitionReset" });
   const now = new Date();
 
-  let last = new Date(player.lastCompetitionReset);
-  if (isNaN(last.getTime())) {
-    console.warn(`⚠️ Invalid lastCompetitionReset for ${player.username || player.telegramId}`);
-    last = now;
-    player.lastCompetitionReset = now;
-    player.competitionScore = 0;
-    await player.save();
+  if (!config) {
+    config = await Config.create({ key: "lastCompetitionReset", value: now });
     return;
   }
 
-  const diff = (now - last) / (1000 * 60 * 60 * 24);
-  if (diff >= 14) {
-    player.competitionScore = 0;
-    player.lastCompetitionReset = now;
-    await player.save();
+  const lastReset = new Date(config.value);
+  const diffDays = (now - lastReset) / (1000 * 60 * 60 * 24);
+
+  if (diffDays >= 14) {
+    // Reset competitionScore for all players
+    await Player.updateMany({}, { $set: { competitionScore: 0 } });
+    config.value = now;
+    await config.save();
+    console.log("🏁 Global competition reset executed.");
   }
 }
 
-// Save Wallet
+// Save wallet
 app.post("/save-wallet", async (req, res) => {
   const { telegramId, username, wallet } = req.body;
   if (!telegramId || !wallet) return res.status(400).json({ success: false });
@@ -68,21 +70,20 @@ app.post("/save-wallet", async (req, res) => {
       { upsert: true, new: true }
     );
     res.json({ success: true });
-  } catch (err) {
-    console.error("Save wallet error:", err);
+  } catch {
     res.status(500).json({ success: false });
   }
 });
 
-// Submit Score
+// Submit score
 app.post("/submit-score", async (req, res) => {
   const { telegramId, username, score } = req.body;
-
   if (!telegramId || typeof score !== "number" || score <= 0) {
-    return res.status(400).json({ success: false, message: "Invalid score input" });
+    return res.status(400).json({ success: false, message: "Invalid input" });
   }
 
   try {
+    await checkAndResetCompetition();
     let player = await Player.findOne({ telegramId });
 
     if (!player) {
@@ -91,10 +92,8 @@ app.post("/submit-score", async (req, res) => {
         username,
         totalScore: score,
         competitionScore: score,
-        lastCompetitionReset: new Date(),
       });
     } else {
-      await checkCompetitionReset(player);
       player.totalScore += score;
       player.competitionScore += score;
       player.username = username;
@@ -103,20 +102,23 @@ app.post("/submit-score", async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("Score submission error:", err.message);
-    res.status(500).json({ success: false, error: err.message });
+    console.error("Error in /submit-score:", err.message);
+    res.status(500).json({ success: false });
   }
 });
 
-// Referral System
+// Referral system
 app.post("/refer", async (req, res) => {
   const { telegramId, username, referrer } = req.body;
-  if (!telegramId || !username || !referrer || telegramId === referrer)
+  if (!telegramId || !username || !referrer || telegramId === referrer) {
     return res.status(400).json({ success: false });
+  }
 
   try {
     const existing = await Player.findOne({ telegramId });
-    if (existing?.referredBy) return res.status(400).json({ message: "Already referred" });
+    if (existing?.referredBy) {
+      return res.status(400).json({ message: "Already referred" });
+    }
 
     const inviter = await Player.findOne({ username: referrer });
     if (!inviter) return res.status(404).json({ message: "Referrer not found" });
@@ -137,35 +139,33 @@ app.post("/refer", async (req, res) => {
     await inviter.save();
 
     res.json({ success: true });
-  } catch (err) {
-    console.error("Referral error:", err.message);
+  } catch {
     res.status(500).json({ success: false });
   }
 });
 
-// Get Player Info
+// Get player info
 app.get("/player/:telegramId", async (req, res) => {
   const { telegramId } = req.params;
-
   try {
+    await checkAndResetCompetition();
     const player = await Player.findOne({ telegramId });
     if (!player) return res.status(404).json({ totalScore: 0 });
 
-    await checkCompetitionReset(player);
+    const config = await Config.findOne({ key: "lastCompetitionReset" });
 
     res.json({
       totalScore: player.totalScore,
       competitionScore: player.competitionScore,
       username: player.username,
-      lastCompetitionReset: player.lastCompetitionReset,
+      lastCompetitionReset: config?.value || null,
     });
-  } catch (err) {
-    console.error("Player fetch error:", err.message);
+  } catch {
     res.status(500).json({ totalScore: 0 });
   }
 });
 
-// Leaderboard (Top 10)
+// Leaderboards
 app.get("/leaderboard", async (req, res) => {
   try {
     const players = await Player.find().sort({ totalScore: -1 }).limit(10);
@@ -177,6 +177,7 @@ app.get("/leaderboard", async (req, res) => {
 
 app.get("/competition-leaderboard", async (req, res) => {
   try {
+    await checkAndResetCompetition();
     const players = await Player.find().sort({ competitionScore: -1 }).limit(10);
     res.json(players);
   } catch {
@@ -184,7 +185,20 @@ app.get("/competition-leaderboard", async (req, res) => {
   }
 });
 
-// Admin (Full List)
+// Competition status endpoint
+app.get("/competition-status", async (req, res) => {
+  const config = await Config.findOne({ key: "lastCompetitionReset" });
+  const last = new Date(config?.value || new Date());
+  const next = new Date(last.getTime() + 14 * 24 * 60 * 60 * 1000);
+
+  res.json({
+    lastCompetitionReset: last,
+    nextResetDate: next,
+    daysRemaining: Math.max(0, 14 - Math.floor((Date.now() - last) / (1000 * 60 * 60 * 24))),
+  });
+});
+
+// Admin players
 app.get("/admin/players", async (req, res) => {
   const { secret } = req.query;
   if (secret !== process.env.ADMIN_SECRET)
@@ -194,11 +208,11 @@ app.get("/admin/players", async (req, res) => {
   res.json(users);
 });
 
-// Root Route
+// Default route
 app.get("/", (req, res) => {
-  res.send("✅ TonDrop Backend is running");
+  res.send("TonDrop Game Backend is live ✅");
 });
 
-// Start Server
+// Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
