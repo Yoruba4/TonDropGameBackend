@@ -213,6 +213,34 @@ app.get("/", (req, res) => {
   res.send("TonDrop Game Backend is live ✅");
 });
 
+// Global Competition Reset Info
+app.get("/reset-info", (req, res) => {
+  try {
+    const globalStart = new Date(process.env.GLOBAL_COMPETITION_START);
+    if (isNaN(globalStart)) {
+      return res.status(500).json({ error: "Invalid GLOBAL_COMPETITION_START date" });
+    }
+
+    const now = new Date();
+    const msInDay = 1000 * 60 * 60 * 24;
+
+    const daysSinceStart = Math.floor((now - globalStart) / msInDay);
+    const periodsPassed = Math.floor(daysSinceStart / 14);
+    const lastReset = new Date(globalStart.getTime() + periodsPassed * 14 * msInDay);
+    const nextReset = new Date(lastReset.getTime() + 14 * msInDay);
+    const daysRemaining = Math.max(0, Math.ceil((nextReset - now) / msInDay));
+
+    res.json({
+      lastReset: lastReset.toISOString(),
+      nextReset: nextReset.toISOString(),
+      daysRemaining,
+    });
+  } catch (err) {
+    console.error("reset-info error:", err.message);
+    res.status(500).json({ error: "Failed to calculate reset info" });
+  }
+});
+
 // Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
